@@ -42,7 +42,7 @@ typedef std::chrono::duration<float, std::milli> Duration;
 //Timed code goes here
 //Time_Point stop = High_Res_Clock::now();
 //Duration duration_ms = stop - start;
-//milliseconds = duration_ms.count();
+//float milliseconds = duration_ms.count();
 //printf( "CPU: burst_search took %f milliseconds to search %d values\n", milliseconds, num_vals );
 
 template <class T>

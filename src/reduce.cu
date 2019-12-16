@@ -22,7 +22,7 @@ __device__ void warpReduce(volatile int *sdata, unsigned int tid) {
   }
 }
 
-
+// Must be called twice. The second time with 1 block and 'num_blocks' threads
 template <unsigned int blockSize>
 __global__ void reduce(int *g_odata, int *g_idata, unsigned int n) {
 
@@ -64,7 +64,10 @@ __global__ void reduce(int *g_odata, int *g_idata, unsigned int n) {
 
 }
 
-
+// SINGLE PASS REDUCTION (Only if the XOR operator is supported natively by 
+// an atomic operator in HW). The output must be initialized to zero before calling
+// this kernel! The kernel cannot do this because 'CUDA's execution model does 
+// not enable the race condition to be resolved between thread blocks'
 // From CUDA Handbook, A Comprehensive Guide to GPU Programming by Nicholas Wilt
 // (WOW!)
 __global__ void reduce_with_atomic( int *out, const int *in, size_t N ) {
@@ -116,31 +119,42 @@ int main( int argc, char* argv[]) {
   printf("num_blocks = %d\n\n", num_blocks);
 
   size_t num_shared_bytes = threads_per_block * sizeof(int);
-
+  Time_Point start = High_Res_Clock::now();
+  
   reduce<BLOCKSIZE><<<num_blocks, threads_per_block, num_shared_bytes>>>( d_sums, d_vals, num_vals );
   reduce<1><<<1, threads_per_block, num_shared_bytes>>>( d_sums, d_sums, num_vals );
 
-  //cudaStreamSynchronize(streams[0]);
   cudaDeviceSynchronize();
+  Time_Point stop = High_Res_Clock::now();
+  Duration duration_ms = stop - start;
 
   printf("Sum is %d\n", sums[0] );
   printf("Expected Sum is %d\n", exp_sum );
   if ( sums[0] != exp_sum ) 
     printf( "MISMATCH: expected sum = %d, actual sum = %d\n", exp_sum, sums[0] );
   printf( "\n" ); 
+  float milliseconds = duration_ms.count();
+  printf( "Two pass reduce with shared memory took %f milliseconds to reduce %d values\n\n", milliseconds, num_vals );
+
 
   printf( "Trying reduce with atomicAdd()...\n" ); 
   cudaMemset( sums, 0, sizeof(int) );
-
   printf("Before reduce_with_atomic, sum is %d\n", sums[0] );
 
+  start = High_Res_Clock::now();
   reduce_with_atomic<<< num_blocks, threads_per_block>>>( sums, vals, num_vals );
   
   cudaDeviceSynchronize();
+  stop = High_Res_Clock::now();
+  duration_ms = stop - start;
+
   printf("Sum from reduce with atomicAdd() is %d\n", sums[0] );
   printf("Expected Sum is %d\n", exp_sum );
   if ( sums[0] != exp_sum ) 
     printf( "MISMATCH: expected sum = %d, reduce with atomicAdd() actual sum = %d\n", exp_sum, sums[0] );
   printf( "\n" ); 
+  milliseconds = duration_ms.count();
+  printf( "Single pass reduce with atomicAdd() took %f milliseconds to reduce %d values\n\n", milliseconds, num_vals );
+
   return SUCCESS;
 }
