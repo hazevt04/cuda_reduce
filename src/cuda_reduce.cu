@@ -1,5 +1,7 @@
 #include "my_cuda_utils.hpp"
 
+constexpr int BLOCKSIZE = 512;
+
 template <unsigned int blockSize>
 __device__ void warpReduce(volatile int *sdata, unsigned int tid) {
    if (blockSize >= 64) {
@@ -24,7 +26,7 @@ __device__ void warpReduce(volatile int *sdata, unsigned int tid) {
 
 // Must be called twice. The second time with 1 block and 'num_blocks' threads
 template <unsigned int blockSize>
-__global__ void reduce(int *g_odata, int *g_idata, unsigned int n) {
+__global__ void my_reduce(int* g_odata, int* g_idata, unsigned int n) {
 
    extern __shared__ int sdata[];
    unsigned int tid = threadIdx.x;
@@ -42,7 +44,7 @@ __global__ void reduce(int *g_odata, int *g_idata, unsigned int n) {
 
    if (blockSize >= 512) { 
       if (tid < 256) { 
-      sdata[tid] += sdata[tid + 256]; 
+         sdata[tid] += sdata[tid + 256]; 
       } 
       __syncthreads(); 
    }
@@ -80,20 +82,19 @@ __global__ void reduce(int *g_odata, int *g_idata, unsigned int n) {
 __global__ void reduce_with_atomic( int *out, const int *in, size_t N ) {
    const int tid = threadIdx.x; 
    int partialSum = 0; 
-   for ( size_t i = blockIdx.x*blockDim.x + tid; i < N; i += blockDim.x*gridDim.x ) {
+   size_t i = blockIdx.x*blockDim.x + tid;;
+   for ( ; i < N; i += blockDim.x*gridDim.x ) {
       partialSum += in[i]; 
    } 
-   atomicAdd( out, partialSum ); 
+   atomicAdd( &out[i], partialSum ); 
 }
 
 
-#define BLOCKSIZE 512
-#define NUM_STREAMS 1
 
 int main( int argc, char* argv[] ) {
    try {
       cudaError_t cerror = cudaSuccess;
-
+      bool debug = false;
       int num_vals = 2050;
       int* sums = nullptr;
       int* vals = nullptr;
@@ -101,78 +102,123 @@ int main( int argc, char* argv[] ) {
       int* d_vals = nullptr;
 
       size_t num_bytes = num_vals * sizeof( int );
+      
+      int device_id = -1;
+      try_cuda_func_throw( cerror, cudaGetDevice( &device_id ) );
 
-      try_cuda_func_throw( cerror, cudaHostAlloc( (void**)&sums, num_bytes, cudaHostAllocMapped ) );
-      try_cuda_func_throw( cerror, cudaHostAlloc( (void**)&vals, num_bytes, cudaHostAllocMapped ) );
+      std::unique_ptr<cudaStream_t> stream_ptr = my_make_unique<cudaStream_t>();
+      try_cudaStreamCreate( stream_ptr.get() );
+      
+      try_cuda_func_throw( cerror, cudaHostAlloc( (void**)&sums, num_bytes, cudaHostAllocDefault ) );
+      try_cuda_func_throw( cerror, cudaHostAlloc( (void**)&vals, num_bytes, cudaHostAllocDefault ) );
 
       for( int index = 0; index < num_vals; index++ ) {
          sums[index] = 0;
          vals[index] = index+1;
-         if ((index < 10) || (index > (num_vals-10))) {
-            printf("vals[%d] = %d\n", index, vals[index] );
-         }
-         if ( index == 11 ) {
-            printf( "...\n" ); 
+         if ( debug ) {
+            if ((index < 10) || (index > (num_vals-10))) {
+               printf("vals[%d] = %d\n", index, vals[index] );
+            }
+            if ( index == 11 ) {
+               printf( "...\n" ); 
+            }
          }
       }
-
-      try_cuda_func_throw( cerror, cudaHostGetDevicePointer( (void**)&d_sums, (void*)sums, 0 ) );
-      try_cuda_func_throw( cerror, cudaHostGetDevicePointer( (void**)&d_vals, (void*)vals, 0 ) );
-
       printf( "\n" ); 
+
+      try_cuda_func_throw( cerror, cudaMalloc( (void**)&d_sums, num_bytes ) );
+      try_cuda_func_throw( cerror, cudaMalloc( (void**)&d_vals, num_bytes ) );
+
       int exp_sum = (num_vals*(num_vals+1))/2;
 
       int threads_per_block = BLOCKSIZE;
       int num_blocks = (num_vals + threads_per_block - 1) / threads_per_block;
 
-      printf("num_vals = %d\n", num_vals);
-      printf("num_blocks = %d\n\n", num_blocks);
+      if ( debug ) {
+         printf( "num_vals = %d\n", num_vals );
+         printf( "num_blocks = %d\n", num_blocks );
+         printf( "threads_per_block is = %d\n", threads_per_block );
+         printf( "BLOCKSIZE is = %d\n", BLOCKSIZE );
+         printf( "actual number of threads will be %d\n\n", (num_blocks * threads_per_block) ); 
+      }
 
+      ///////////////////////////////////////////////
+      // TWO PASS REDUCE
+      //////////////////////////////////////////////////
       size_t num_shared_bytes = threads_per_block * sizeof(int);
+      
       Time_Point start = Steady_Clock::now();
 
-      reduce<BLOCKSIZE><<<num_blocks, threads_per_block, num_shared_bytes>>>( d_sums, d_vals, num_vals );
+      try_cuda_func_throw( cerror, cudaMemcpyAsync( d_vals, vals, num_bytes,
+               cudaMemcpyHostToDevice, *(stream_ptr.get()) ) );
+      
+      my_reduce<BLOCKSIZE><<<num_blocks, threads_per_block, num_shared_bytes, *(stream_ptr.get())>>>( d_sums, d_vals, num_vals );
+      //try_cuda_func_throw( cerror, cudaPeekAtLastError() );
+      my_reduce<1><<<1, threads_per_block, num_shared_bytes, *(stream_ptr.get())>>>( d_sums, d_sums, num_vals );
+
+      try_cuda_func_throw( cerror, cudaMemcpyAsync( sums, d_sums, num_bytes,
+               cudaMemcpyDeviceToHost, *(stream_ptr.get()) ) );
+      
       try_cuda_func_throw( cerror, cudaDeviceSynchronize() );
 
-      printf("Before reduce<1>(), Sum is %d\n", sums[0] );
-
-      reduce<1><<<1, threads_per_block, num_shared_bytes>>>( d_sums, d_vals, num_vals );
-
-      try_cuda_func_throw( cerror, cudaDeviceSynchronize() );
       Time_Point stop = Steady_Clock::now();
       Duration_ms duration_ms = stop - start;
 
-      printf("Sum is %d\n", sums[0] );
-      printf("Expected Sum is %d\n", exp_sum );
+      if ( debug ) {
+         for( int index = 0; index < num_vals; ++index ) {
+            printf("After GPU: Sum %d is %d\n", index, sums[index] );
+         } 
+         printf("\n\n");
+         printf("Sum is %d\n", sums[0] );
+         printf("Expected Sum is %d\n\n", exp_sum );
+      }
+
       if ( sums[0] != exp_sum ) {
-         throw std::runtime_error( std::string{ __func__ } + std::string{"(): MISMATCH: two call reduce: expected sum = "} +
+         throw std::runtime_error( std::string{ __func__ } + std::string{"(): MISMATCH: two pass reduce: expected sum = "} +
             std::to_string(exp_sum) + std::string{", actual sum = "} + std::to_string( sums[0] )  );
       }
-      printf( "\n" ); 
       float milliseconds = duration_ms.count();
-      printf( "Two pass reduce with shared memory took %f milliseconds to reduce %d values\n\n", milliseconds, num_vals );
+      printf( "Two pass reduce with shared memory: All results matched expected. It took %f milliseconds to reduce %d values\n\n", milliseconds, num_vals );
 
 
-      printf( "Trying reduce with atomicAdd()...\n" ); 
+      ///////////////////////////////////////////////
+      // REDUCE WITH ATOMIC ADD
+      //////////////////////////////////////////////////
+
+      // Clear the sums from the previous run
       try_cuda_func_throw( cerror, cudaMemset( sums, 0, sizeof(int) ) );
-      printf("Before reduce_with_atomic, sum is %d\n", sums[0] );
+      for( int index = 0; index < num_vals; ++index ) {
+         sums[index] = 0;
+      } 
+      num_shared_bytes = 0u;
 
+      if ( debug ) printf("Before reduce_with_atomic, sum is %d\n", sums[0] );
+   
       start = Steady_Clock::now();
-      reduce_with_atomic<<< num_blocks, threads_per_block>>>( sums, vals, num_vals );
+      
+      try_cuda_func( cerror, cudaMemcpyAsync( d_vals, vals, num_bytes,
+               cudaMemcpyHostToDevice, *(stream_ptr.get()) ) );
+      
+      reduce_with_atomic<<< num_blocks, threads_per_block, num_shared_bytes, *(stream_ptr.get())>>>( d_sums, d_vals, num_vals );
+      try_cuda_func_throw( cerror, cudaPeekAtLastError() );
+      
+      try_cuda_func_throw( cerror, cudaMemcpyAsync( sums, d_sums, num_bytes,
+               cudaMemcpyDeviceToHost, *(stream_ptr.get()) ) );
 
       try_cuda_func_throw( cerror, cudaDeviceSynchronize() );
       stop = Steady_Clock::now();
       duration_ms = stop - start;
 
-      printf("Sum from reduce with atomicAdd() is %d\n", sums[0] );
-      printf("Expected Sum is %d\n", exp_sum );
+      if ( debug ) {
+         printf("Sum from reduce with atomicAdd() is %d\n", sums[0] );
+         printf("Expected Sum is %d\n\n", exp_sum );
+      }
       if ( sums[0] != exp_sum ) {
          throw std::runtime_error( std::string{ __func__ } + std::string{"(): MISMATCH: reduce with atomicAdd(): expected sum = "} +
             std::to_string(exp_sum) + std::string{", actual sum = "} + std::to_string( sums[0] )  );
       }
-      printf( "\n" ); 
       milliseconds = duration_ms.count();
-      printf( "Single pass reduce with atomicAdd() took %f milliseconds to reduce %d values\n\n", milliseconds, num_vals );
+      printf( "Single pass reduce with atomicAdd(): All results matched expected. It took %f milliseconds to reduce %d values\n\n", milliseconds, num_vals );
 
       return EXIT_SUCCESS;
 
