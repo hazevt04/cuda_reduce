@@ -1,17 +1,17 @@
 // C++ File for utils
 
-#include "utils.h"
+#include "my_utils.hpp"
 
-int multi_free( void* arg1, ... ) {
-  va_list args;
-  void *vp;
-  if ( arg1 != NULL ) free(arg1);
-  va_start(args, arg1);
-  while ((vp = va_arg(args, void *)) != 0)
-      if ( vp != NULL ) free(vp);
-  va_end(args);
-
-  return SUCCESS;
+// variadic free function!
+int free_these(void *arg1, ...) {
+    va_list args;
+    void *vp;
+    if ( arg1 != NULL ) free(arg1);
+    va_start(args, arg1);
+    while ((vp = va_arg(args, void *)) != 0)
+        if ( vp != NULL ) free(vp);
+    va_end(args);
+    return SUCCESS;
 }
 
 void printf_floats( float* const vals, const int num_vals ) {

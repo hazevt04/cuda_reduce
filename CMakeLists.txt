@@ -1,6 +1,10 @@
 # CMakeLists.txt to build add.cu
 cmake_minimum_required(VERSION 2.8)
 
+project(cuda_reduce)
+
+set(EXEC_NAME "${CMAKE_PROJECT_NAME}")
+
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -16,12 +20,15 @@ LIST(APPEND CUDA_NVCC_FLAGS "--ptxas-options=-v")
 set(CUDA_VERBOSE_BUILD ON)
 
 set(SRCS
-   "src/reduce.cu"
-   )
+   "src/my_cufft_utils.cpp"
+   "src/my_utils.cpp"
+   "src/my_file_io_funcs.cpp"
+   "src/cuda_reduce.cu"
+)
 
 include_directories( "include" )
 
-cuda_add_executable(reduce
+cuda_add_executable(${EXEC_NAME}
    "${SRCS}"
-   )
+)
 
