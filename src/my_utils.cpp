@@ -2,6 +2,28 @@
 
 #include "my_utils.hpp"
 
+// Just in case there is no intrinsic
+// From Hacker's Delight
+int my_popcount(unsigned int x) {
+   x -= ((x >> 1) & 0x55555555);
+   x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
+   x = (x + (x >> 4)) & 0x0F0F0F0F;
+   x += (x >> 8);
+   x += (x >> 16);    
+   return x & 0x0000003F;
+}
+
+// From Nvidia reduction example
+unsigned int next_power_of_two(unsigned int x) {
+    --x;
+    x |= x >> 1;
+    x |= x >> 2;
+    x |= x >> 4;
+    x |= x >> 8;
+    x |= x >> 16;
+    return ++x;
+}
+
 // variadic free function!
 int free_these(void *arg1, ...) {
     va_list args;

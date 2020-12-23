@@ -90,6 +90,9 @@
 #   define MAX(a, b) ((a) > (b)) ? (a) : (b);
 #endif
 
+#ifndef MIN
+#define MIN(x,y) ( ((x) < (y)) ? (x) : (y) )
+#endif
 
 #ifndef CEILING
 #   define CEILING(a, b) ((a) + ((b)-1)) / (b);
@@ -110,6 +113,15 @@ std::unique_ptr<T> my_make_unique(Args&&... args) {
 // or unsigned integers, 0 < a,b <= (2^31)-1
 inline int difference_or_zero(int a, int b) { return ((a - b) & ~((a - b) >> 31)); }
 
+// Just in case there is no intrinsic
+// From Hacker's Delight
+int my_popcount( unsigned int x );
+
+unsigned int next_power_of_two( unsigned int x );
+
+inline bool is_power_of_two( int val ) {
+   return ( my_popcount(val) == 1 );  
+}
 
 #define MILLISECONDS_PER_SECOND (1000.0f)
 typedef std::chrono::steady_clock Steady_Clock;
