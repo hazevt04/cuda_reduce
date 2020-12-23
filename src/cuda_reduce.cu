@@ -220,6 +220,14 @@ int main( int argc, char* argv[] ) {
       milliseconds = duration_ms.count();
       printf( "Single pass reduce with atomicAdd(): All results matched expected. It took %f milliseconds to reduce %d values\n\n", milliseconds, num_vals );
 
+      if ( sums ) try_cuda_func_throw( cerror, cudaFreeHost( sums ) );
+      if ( vals ) try_cuda_func_throw( cerror, cudaFreeHost( vals ) );
+
+      if ( d_sums ) try_cuda_func_throw( cerror, cudaFree( d_sums ) );
+      if ( d_vals ) try_cuda_func_throw( cerror, cudaFree( d_vals ) );
+
+      if ( stream_ptr ) try_cuda_func_throw( cerror, cudaStreamDestroy( *(stream_ptr.get()) )  );
+      
       return EXIT_SUCCESS;
 
    } catch( std::exception& ex ) {
